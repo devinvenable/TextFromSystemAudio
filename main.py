@@ -5,13 +5,32 @@ import pasimple
 import numpy as np
 from recordingToText import toTextFile
 import argparse
-import select
-import sys
 
 # Ignore warnings for now
 import warnings
-
 warnings.filterwarnings("ignore")
+
+
+parser = argparse.ArgumentParser(description='Audio Capture From System')
+parser.add_argument('--stream',
+                    help='Give a name for the stream.',
+                    default="yo")
+parser.add_argument(
+    '--threshold',
+    help='Stop recording when the amplitude is below this threshold.',
+    default=0.1)
+parser.add_argument('--device_name',
+                    help='Record from this device',
+                    default="record-n-play.monitor")
+args = parser.parse_args()
+
+# Audio attributes for the recording
+FORMAT = pasimple.PA_SAMPLE_S32LE
+SAMPLE_WIDTH = pasimple.format2width(FORMAT)
+CHANNELS = 1
+SAMPLE_RATE = 16000
+seconds_of_audio = 3
+threshold = float(args.threshold)
 
 def scaleArray (data):
     return (data - data.min()) / (data.max() - data.min())
@@ -29,39 +48,48 @@ def foundAudio(data, threshold):
     if not np.isnan(m) and m > threshold:
         return True
 
-parser = argparse.ArgumentParser(description='Audio Capture From System')
-parser.add_argument('--stream',
-                    help='Give a name for the stream.',
-                    default="yo")
-parser.add_argument(
-    '--threshold',
-    help='Stop recording when the amplitude is below this threshold.',
-    default=0.5)
-parser.add_argument('--device_name',
-                    help='Record from this device',
-                    default="record-n-play.monitor")
-args = parser.parse_args()
+def rms_energy(audio):
+    return np.sqrt(np.mean(np.square(audio), axis=-1))
 
-# Audio attributes for the recording
-FORMAT = pasimple.PA_SAMPLE_S32LE
-SAMPLE_WIDTH = pasimple.format2width(FORMAT)
-CHANNELS = 1
-SAMPLE_RATE = 16000
-seconds_of_audio = 2
-threshold = float(args.threshold)
+def splitLastAudio(audio, threshold=0.1):
+    # Find silence regions
+    energy = rms_energy(audio)
+    is_silence = energy < threshold
 
+    # Find indices of transitions between silence and non-silence regions
+    transitions = np.where(np.abs(np.diff(is_silence.astype(int))) == 1)[0]
+
+    if len(transitions) == 0:
+        return audio, None
+
+    # Find positions of the last detected silence and next transient immediately following
+    last_silence_indices = np.where(transitions < audio.shape[0] / 2)
+
+    if last_silence_indices[0].size == 0:
+        last_silence = 0
+    else:
+        last_silence = transitions[np.max(last_silence_indices)] # closest to the middle of audio
+
+    # Split audio
+    audio1 = audio[:last_silence]
+    audio2 = audio[last_silence:]
+
+    return audio1, audio2
 
 if __name__ == '__main__':
 
     while True:
         stop_recording = False  # Flag to control the recording loop
-
+        remaining_audio = []  # List to store the remaining audio chunks
+        
         # Start the recording loop
         while not stop_recording:
             
             # Initialize the recording
             recording = []  # List to store the recorded audio chunks
-
+            if len(remaining_audio) > 0:
+                recording.append(remaining_audio.pop())
+            
             try:
 
                 with pasimple.PaSimple(
@@ -83,12 +111,16 @@ if __name__ == '__main__':
                     # Reshape the array to a 2D array with one column
                     audio_data_array = audio_data_array.reshape(-1, 1)
 
-                    # Append the recorded chunk to the list
-                    recording.append(audio_data_array)
-
                     # Check if a pause was detected in the recorded chunk
                     if foundSilence(audio_data_array, threshold):
                         stop_recording = True  # Stop the recording loop
+                    
+                    audio_data_array, last_audio_data_array = splitLastAudio(audio_data_array, threshold)
+                    if last_audio_data_array is not None:
+                        remaining_audio.append(last_audio_data_array)
+                    
+                    # Append the recorded chunk to the list
+                    recording.append(audio_data_array)
 
             except KeyboardInterrupt:
                 stop_recording = True

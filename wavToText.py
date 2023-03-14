@@ -12,6 +12,10 @@ def WavToText(input_file):
     # read the file
     speech, samplerate = sf.read(input_file)
 
+    # Check if the input audio is too short
+    if speech.shape[0] < 10:
+        return None 
+    
     # make it 1-D
     if len(speech.shape) > 1:
         speech = speech[:, 0] + speech[:, 1]

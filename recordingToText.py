@@ -12,6 +12,9 @@ def run(recordingFilename, textFilename):
 
     # Convert the audio file to text
     result = WavToText(recordingFilename)
+    if result is None:
+       return
+    
     with open(textFilename, "a") as file:
         file.write(result['text'])
         file.write(', ')
